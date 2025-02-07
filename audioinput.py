@@ -1,6 +1,3 @@
-# Copyright 2023 The MediaPipe Authors. All Rights Reserved.
-# Licensed under the Apache License, Version 2.0
-
 import argparse
 import time
 from mediapipe.tasks import python
@@ -17,8 +14,6 @@ def run(model: str, max_results: int, score_threshold: float) -> None:
         score_threshold: The score threshold of classification results.
     """
 
-    interval_between_inference = 0.35  # Match frame capture timing in seconds
-
     # Callback to process classification results.
     def save_result(result: audio.AudioClassifierResult, timestamp_ms: int):
         detected_time = time.time()  # High-precision timestamp
@@ -28,6 +23,8 @@ def run(model: str, max_results: int, score_threshold: float) -> None:
                 "infant cry" in category.category_name.lower()) and category.score > score_threshold:
                 print(f"[{detected_time:.3f}] Baby is crying! Detected: {category.category_name}, Confidence: {category.score:.2f}")
                 detected = True
+        if not detected:
+            print(f"[{detected_time:.3f}] No baby crying detected.")
 
     # Initialize the audio classification model.
     base_options = python.BaseOptions(model_asset_path=model)
@@ -49,6 +46,10 @@ def run(model: str, max_results: int, score_threshold: float) -> None:
     # Start audio recording in the background.
     record.start_recording()
 
+    # Initialize a reference timestamp.
+    reference_time = time.monotonic_ns() // 1_000_000  # Current time in milliseconds.
+    buffer_duration = buffer_size / sample_rate  # Calculate interval dynamically
+
     # Loop until interrupted.
     print("Starting audio classification. Press Ctrl+C to stop.")
     while True:
@@ -56,10 +57,15 @@ def run(model: str, max_results: int, score_threshold: float) -> None:
             # Load the input audio from the AudioRecord instance and run classify.
             data = record.read(buffer_size)
             audio_data.load_from_array(data)
-            classifier.classify_async(audio_data, time.time_ns() // 1_000_000)
 
-            # Throttle the inference to match frame capture timing
-            time.sleep(interval_between_inference)
+            # Generate a strictly increasing timestamp.
+            timestamp = reference_time
+            reference_time += int(buffer_duration * 1000)  # Increment by buffer duration in ms
+
+            classifier.classify_async(audio_data, timestamp)
+
+            # Throttle inference dynamically
+            time.sleep(buffer_duration)
         except KeyboardInterrupt:
             print("Stopping audio classification...")
             break
@@ -82,7 +88,7 @@ def main():
         '--scoreThreshold',
         help='The score threshold of classification results.',
         required=False,
-        default=0.8,
+        default=0.3,
     )
     args = parser.parse_args()
 
